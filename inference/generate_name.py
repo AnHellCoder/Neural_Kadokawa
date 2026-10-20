@@ -1,111 +1,37 @@
-import torch
 import argparse
 
-from peft import PeftModel
-from transformers import AutoModelForCausalLM, AutoTokenizer
+
+def main():
+    parser = argparse.ArgumentParser(description="Anime titles generation", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument("--model", default="/userspace/kad2/models/qwen3-4b", help="Base model path")
+    parser.add_argument("--weights", default="/userspace/kad2/models/nk_lora", help="LoRA-adapter")
+    parser.add_argument("--prompt", required=True, help="Request")
+    parser.add_argument("--count", type=int, default=50, help="Amount of generated titles")
+    parser.add_argument("--temperature", type=float, default=0.98, help="Temperature")
+    args = parser.parse_args()
+    if args.count < 1 or args.temperature <= 0:
+        parser.error("count and temperature must be positive")
+    if not args.prompt.strip():
+        parser.error("Prompt is empty")
+    import torch
+    from peft import PeftModel
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)
+    base_model = AutoModelForCausalLM.from_pretrained(args.model, local_files_only=True, dtype="auto", device_map="auto")
+    model = PeftModel.from_pretrained(base_model, args.weights, local_files_only=True)
+    model.eval()
+    text = tokenizer.apply_chat_template([{"role": "user", "content": args.prompt}], tokenize=False, add_generation_prompt=True, enable_thinking=False)
+    inputs = tokenizer([text], return_tensors="pt", add_special_tokens=False).to(model.device)
+    input_length = inputs.input_ids.shape[1]
+    for index in range(1, args.count + 1):
+        with torch.inference_mode():
+            generated = model.generate(**inputs, max_new_tokens=528, do_sample=True, temperature=args.temperature, top_p=0.95, top_k=60, repetition_penalty=1.05, pad_token_id=tokenizer.eos_token_id)
+        content = tokenizer.decode(generated[0][input_length:], skip_special_tokens=True).strip()
+        print(f"===== Generation {index} =====", flush=True)
+        print(content, flush=True)
+        print(flush=True)
 
 
-BASE_MODEL_PATH = "/userspace/kad2/models/qwen3-4b"
-LORA_ADAPTER_PATH = "/userspace/kad2/models/nk_lora"
-
-
-# Загружаем токенайзер базовой модели
-tokenizer = AutoTokenizer.from_pretrained(
-    BASE_MODEL_PATH,
-    local_files_only=True,
-)
-
-# Загружаем базовую модель
-base_model = AutoModelForCausalLM.from_pretrained(
-    BASE_MODEL_PATH,
-    local_files_only=True,
-    dtype="auto",
-    device_map="auto",
-)
-
-# Подключаем обученный LoRA-адаптер
-model = PeftModel.from_pretrained(
-    base_model,
-    LORA_ADAPTER_PATH,
-)
-
-model.eval()
-
-
-# Подготавливаем вход
-#prompt = "Напиши энциклопедическую статью о вымышленном существе."
-#prompt = """
-#Напиши сатирическую псевдоэнциклопедическую статью
-#о полностью несуществующем божестве.
-
-#Важно:
-#- божество должно быть вымышленным;
-#- не используй реальных людей, богов, царей и исторические события;
-#- придумай нелепую область покровительства;
-#- добавь абсурдный культ и бессмысленный ритуал;
-#- текст должен звучать уверенно и академично, но содержание должно быть смешным;
-#- не пиши обычную биографию врача, учёного, правителя или писателя;
-#- не добавляй реальные ISBN, настоящие университеты и реальные библиографические источники.
-#"""
-def get_prompt():
-     parser = argparse.ArgumentParser()
-
-     parser.add_argument("--prompt")
-
-     args = parser.parse_args()
-
-     return args.prompt
-
-prompt = get_prompt()
-print(f"Подготовленный промт: {prompt}")
-
-messages = [
-    {
-        "role": "user",
-        "content": prompt,
-    }
-]
-
-text = tokenizer.apply_chat_template(
-    messages,
-    tokenize=False,
-    add_generation_prompt=True,
-    enable_thinking=False,
-)
-
-model_inputs = tokenizer(
-    [text],
-    return_tensors="pt",
-).to(model.device)
-
-for i in range(50):
-    # Генерация
-    with torch.inference_mode():
-        generated_ids = model.generate(
-            **model_inputs,
-            max_new_tokens=528,
-
-            do_sample=True,
-            temperature=0.98,
-            top_p=0.95,
-            top_k=60,
-            repetition_penalty=1.05,
-
-            pad_token_id=tokenizer.eos_token_id,
-        )
-
-
-    # Убираем токены исходного prompt
-    input_length = model_inputs.input_ids.shape[1]
-    output_ids = generated_ids[0][input_length:].tolist()
-
-
-    # Для enable_thinking=False отдельное извлечение thinking обычно не нужно
-    content = tokenizer.decode(
-        output_ids,
-        skip_special_tokens=True,
-    ).strip()
-
-    print(f"=====Генерация {i}=====")
-    print(content)
-    print()
+if __name__ == "__main__":
+    main()
